@@ -1,0 +1,15 @@
+access_token=
+eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJzdWIiOiI3MmRlOWQ3Ny00NTA4LTQ3YWYtOGVmMS0yZDFhZTJmNWE4ZTQiLCJpc3MiOiJwbGF0Zm9ybS1hcGkiLCJleHAiOjE3MzIwOTY2MTksInBsYW4iOiJmcmVlIiwiaWF0IjoxNzMyMDkzMDE5fQ.RWK5qpbsd63ZL0XnVs1U3YtPiI-DxrJU3IIvrqqb5BRqzgBVzlqu78GCKTU6Y4drcUx3rZ-YD9M56YngGXLxDQ"", 
+
+refresh_token=
+"db43b831-d523-4f4e-9f81-72e243b8be3c"
+
+{'sensors': [{'battery': 100,
+              'nickname': '人感センサ',
+              'sensor_type': 'human',
+              'signal_strength': -74,
+              'uuid': '3b189212-31ad-4f03-8487-0918689bcac1'}]}
+
+
+room id =
+['388625ac-1753-48b8-9c91-0a526f861a95']
