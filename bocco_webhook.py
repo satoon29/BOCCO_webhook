@@ -1,8 +1,8 @@
 import os
 from flask import Flask, request, jsonify
-import requests
 import logging
 from dotenv import load_dotenv
+from sensor_handler import SensorEventHandler
 
 # .envから環境変数を読み込む
 load_dotenv()
@@ -17,25 +17,8 @@ app = Flask(__name__)
 # ログ設定
 logging.basicConfig(level=logging.INFO)
 
-# BOCCO emoにしゃべらせる関数
-def speak(room_id, token, message):
-    url = f"https://platform-api.bocco.me/v1/rooms/{room_id}/messages/text"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "text": message
-    }
-
-    try:
-        response = requests.post(url, headers=headers, json=data)
-        response.raise_for_status()
-        logging.info(f"BOCCOに送信成功: {message}")
-    except requests.exceptions.RequestException as e:
-        logging.error(f"BOCCOへの送信エラー: {e}")
-        return False
-    return True
+# SensorEventHandlerのインスタンス作成
+handler = SensorEventHandler(ROOM_ID, ACCESS_TOKEN)
 
 # Webhookで受け取るエンドポイント
 @app.route("/webhook", methods=["POST"])
@@ -46,20 +29,38 @@ def webhook():
     if not data:
         return jsonify({"error": "no JSON payload"}), 400
 
-    sensor_type = data.get("sensor_type")
-    event_type = data.get("event_type")
-
-    if sensor_type == "human" and event_type == "detected":
-        success = speak(
-            room_id=ROOM_ID,
-            token=ACCESS_TOKEN,
-            message="おかえりなさい！"
-        )
-        return jsonify({"status": "spoken" if success else "failed"}), 200
+    # BOCCOから送られるデータ構造を解析
+    event = data.get("event")  # "human_sensor.detected"
+    sensor_data = data.get("data")  # ネストされたセンサデータ
+    
+    # イベント名から sensor_type と event_type を抽出
+    if event:
+        parts = event.split(".")
+        sensor_type = parts[0] if len(parts) > 0 else None  # "human_sensor"
+        event_type = parts[1] if len(parts) > 1 else None   # "detected"
     else:
-        logging.info("対象外のイベントでした")
-        return jsonify({"status": "ignored"}), 200
+        sensor_type = None
+        event_type = None
+
+    logging.info(f"解析結果 - sensor_type: {sensor_type}, event_type: {event_type}")
+
+    # センサイベントを処理
+    success = handler.handle_sensor_event(sensor_type, event_type, sensor_data)
+    
+    return jsonify({"status": "processed", "success": success}), 200
+
+@app.route("/health", methods=["GET"])
+def health_check():
+    """ヘルスチェックエンドポイント"""
+    return jsonify({"status": "healthy"}), 200
     
 if __name__ == "__main__":
-    app.run(port=5000)
+    # 環境変数の確認
+    if not ROOM_ID or not ACCESS_TOKEN:
+        logging.error("❌ .env ファイルに BOCCO_ROOM_ID と BOCCO_ACCESS_TOKEN を設定してください")
+        exit(1)
+    
+    # 開発環境用の設定
+    debug_mode = os.getenv("FLASK_ENV", "development") == "development"
+    app.run(host="0.0.0.0", port=5001, debug=debug_mode, use_reloader=False)
 
