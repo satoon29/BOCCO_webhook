@@ -1,8 +1,16 @@
 import os
+import sys
+import io
 from flask import Flask, request, jsonify
 import logging
 from dotenv import load_dotenv
 from sensor_handler import SensorEventHandler
+
+# Windows環境での文字コード対応
+if sys.platform == "win32":
+    # コンソール出力の文字コードを UTF-8 に設定
+    if sys.stdout.encoding != 'utf-8':
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 # .envから環境変数を読み込む
 load_dotenv()
@@ -10,15 +18,19 @@ load_dotenv()
 # 環境変数から設定を読み込み
 ROOM_ID = os.getenv("BOCCO_ROOM_ID")
 ACCESS_TOKEN = os.getenv("BOCCO_ACCESS_TOKEN")
+USER_ID = os.getenv("BOCCO_USER_ID", "test00")  # デフォルト: test00
 
 # Flaskアプリの作成
 app = Flask(__name__)
 
 # ログ設定
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
-# SensorEventHandlerのインスタンス作成
-handler = SensorEventHandler(ROOM_ID, ACCESS_TOKEN)
+# SensorEventHandlerのインスタンス作成（user_idを渡す）
+handler = SensorEventHandler(ROOM_ID, ACCESS_TOKEN, USER_ID)
 
 # Webhookで受け取るエンドポイント
 @app.route("/webhook", methods=["POST"])
@@ -57,8 +69,10 @@ def health_check():
 if __name__ == "__main__":
     # 環境変数の確認
     if not ROOM_ID or not ACCESS_TOKEN:
-        logging.error("❌ .env ファイルに BOCCO_ROOM_ID と BOCCO_ACCESS_TOKEN を設定してください")
+        logging.error("[ERROR] .env ファイルに BOCCO_ROOM_ID と BOCCO_ACCESS_TOKEN を設定してください")
         exit(1)
+    
+    logging.info(f"[INFO] Firebase ユーザーID: {USER_ID}")
     
     # 開発環境用の設定
     debug_mode = os.getenv("FLASK_ENV", "development") == "development"
