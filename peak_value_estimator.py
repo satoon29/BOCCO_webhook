@@ -70,7 +70,6 @@ def fetch_emotion_data(db, user_id):
 VALENCE_MIN = 2.88
 VALENCE_MAX = 7.83
 
-
 def normalize_valence(valence):
     """Valence値を[-1, 1]の範囲に線形正規化"""
     v_norm = 2.0 * ((valence - VALENCE_MIN) / (VALENCE_MAX - VALENCE_MIN)) - 1.0

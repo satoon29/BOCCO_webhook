@@ -1,10 +1,13 @@
 import os
 import sys
 import io
+import json
+import requests
 from flask import Flask, request, jsonify
 import logging
 from dotenv import load_dotenv
 from sensor_handler import SensorEventHandler
+from slack_notifier import SlackNotifier
 
 # Windows環境での文字コード対応
 if sys.platform == "win32":
@@ -16,9 +19,10 @@ if sys.platform == "win32":
 load_dotenv()
 
 # 環境変数から設定を読み込み
-ROOM_ID = os.getenv("BOCCO_ROOM_ID")
 ACCESS_TOKEN = os.getenv("BOCCO_ACCESS_TOKEN")
-USER_ID = os.getenv("BOCCO_USER_ID", "test00")  # デフォルト: test00
+ROOM_USER_MAPPING_STR = os.getenv("BOCCO_ROOM_USER_MAPPING", "{}")
+SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
+SLACK_USER_URL_MAPPING_STR = os.getenv("SLACK_USER_URL_MAPPING", "{}")
 
 # Flaskアプリの作成
 app = Flask(__name__)
@@ -29,8 +33,48 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
-# SensorEventHandlerのインスタンス作成（user_idを渡す）
-handler = SensorEventHandler(ROOM_ID, ACCESS_TOKEN, USER_ID)
+# Room ID と room 名のマッピングを読み込み
+try:
+    ROOM_USER_MAPPING = json.loads(ROOM_USER_MAPPING_STR)
+    logging.info(f"[OK] Room-User マッピングを読み込みました: {ROOM_USER_MAPPING}")
+except json.JSONDecodeError as e:
+    logging.error(f"[ERROR] BOCCO_ROOM_USER_MAPPING のJSON解析に失敗しました: {e}")
+    ROOM_USER_MAPPING = {}
+
+# Slack User URL マッピングを読み込み
+slack_notifier = None
+if SLACK_WEBHOOK_URL:
+    try:
+        slack_user_url_mapping = json.loads(SLACK_USER_URL_MAPPING_STR)
+        slack_notifier = SlackNotifier(SLACK_WEBHOOK_URL, slack_user_url_mapping)
+        logging.info(f"[OK] Slack 通知機能を有効化しました")
+    except json.JSONDecodeError as e:
+        logging.error(f"[ERROR] SLACK_USER_URL_MAPPING のJSON解析に失敗しました: {e}")
+else:
+    logging.warning("[WARNING] SLACK_WEBHOOK_URL が設定されていません")
+
+
+def get_user_id_from_room_id(room_id):
+    """
+    Room ID から user_id を取得（ローカルマッピングから）
+    
+    Parameters:
+    -----------
+    room_id : str
+        BOCCO の部屋ID
+    
+    Returns:
+    --------
+    str: user_id、マッピングに存在しない場合は None
+    """
+    user_id = ROOM_USER_MAPPING.get(room_id)
+    if user_id:
+        logging.info(f"[OK] Room ID {room_id} → User ID: {user_id}")
+        return user_id
+    else:
+        logging.warning(f"[WARNING] Room ID {room_id} はマッピングに存在しません")
+        return None
+
 
 # Webhookで受け取るエンドポイント
 @app.route("/webhook", methods=["POST"])
@@ -41,20 +85,30 @@ def webhook():
     if not data:
         return jsonify({"error": "no JSON payload"}), 400
 
-    # BOCCOから送られるデータ構造を解析
+    # BOCCOから送られるデータを解析
+    room_id = data.get("uuid")  # webhook の "uuid" が Room ID
     event = data.get("event")  # "human_sensor.detected"
     sensor_data = data.get("data")  # ネストされたセンサデータ
     
     # イベント名から sensor_type と event_type を抽出
     if event:
         parts = event.split(".")
-        sensor_type = parts[0] if len(parts) > 0 else None  # "human_sensor"
-        event_type = parts[1] if len(parts) > 1 else None   # "detected"
+        sensor_type = parts[0] if len(parts) > 0 else None
+        event_type = parts[1] if len(parts) > 1 else None
     else:
         sensor_type = None
         event_type = None
 
-    logging.info(f"解析結果 - sensor_type: {sensor_type}, event_type: {event_type}")
+    logging.info(f"解析結果 - room_id: {room_id}, sensor_type: {sensor_type}, event_type: {event_type}")
+
+    # ローカルマッピングから user_id を取得
+    user_id = get_user_id_from_room_id(room_id)
+    if not user_id:
+        logging.warning(f"[WARNING] Room ID {room_id} の user_id が見つかりません")
+        return jsonify({"status": "processed", "success": False}), 200
+
+    # SensorEventHandler を動的に作成（slack_notifier を渡す）
+    handler = SensorEventHandler(room_id, ACCESS_TOKEN, user_id, slack_notifier)
 
     # センサイベントを処理
     success = handler.handle_sensor_event(sensor_type, event_type, sensor_data)
@@ -68,11 +122,13 @@ def health_check():
     
 if __name__ == "__main__":
     # 環境変数の確認
-    if not ROOM_ID or not ACCESS_TOKEN:
-        logging.error("[ERROR] .env ファイルに BOCCO_ROOM_ID と BOCCO_ACCESS_TOKEN を設定してください")
+    if not ACCESS_TOKEN:
+        logging.error("[ERROR] .env ファイルに BOCCO_ACCESS_TOKEN を設定してください")
         exit(1)
     
-    logging.info(f"[INFO] Firebase ユーザーID: {USER_ID}")
+    if not ROOM_USER_MAPPING:
+        logging.error("[ERROR] .env ファイルに BOCCO_ROOM_USER_MAPPING を設定してください")
+        exit(1)
     
     # 開発環境用の設定
     debug_mode = os.getenv("FLASK_ENV", "development") == "development"
