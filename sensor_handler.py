@@ -5,6 +5,7 @@ import subprocess
 import sys
 import io
 from peak_value_estimator import estimate_single_day
+from message_manager import MessageManager
 
 # Windows環境での文字コード対応
 if sys.platform == "win32":
@@ -14,18 +15,20 @@ if sys.platform == "win32":
 class SensorEventHandler:
     """センサイベントを処理し、BOCCOに発話させるクラス"""
     
-    def __init__(self, room_id, access_token, user_id, slack_notifier=None):
+    def __init__(self, room_id, access_token, user_id, slack_notifier=None, message_manager=None):
         """
         Args:
             room_id: BOCCOの部屋ID（webhook の uuid）
             access_token: BOCCOアクセストークン
             user_id: Firebase のユーザーID（room の名前）
             slack_notifier: SlackNotifier インスタンス（オプション）
+            message_manager: MessageManager インスタンス（オプション）
         """
         self.room_id = room_id
         self.access_token = access_token
         self.user_id = user_id
         self.slack_notifier = slack_notifier
+        self.message_manager = message_manager
         self.api_url = "https://platform-api.bocco.me/v1/rooms/{}/messages/text"
     
     def speak(self, message, retry=True):
@@ -44,12 +47,17 @@ class SensorEventHandler:
             "Authorization": f"Bearer {self.access_token}",
             "Content-Type": "application/json"
         }
-        data = {"text": message}
+        data = {"text": "おかえりなさい。" + message + "今日のフィードバックを確認してみましょう！"}
         
         try:
             response = requests.post(url, headers=headers, json=data)
             response.raise_for_status()
             logging.info(f"[OK] BOCCO発話成功 (Room: {self.room_id}, User: {self.user_id}): {message}")
+            
+            # 発話成功時、Slack にも通知
+            if self.slack_notifier:
+                self._notify_slack_for_speech(message)
+            
             return True
         except requests.exceptions.HTTPError as e:
             if response.status_code == 401 and retry:
@@ -157,35 +165,32 @@ class SensorEventHandler:
         message = self._generate_message(sensor_type, event_type, data)
         
         if message:
+            # speak() 内で自動的に Slack 通知も行われる
             success = self.speak(message)
-            
-            # 人感センサーイベントの場合、Slack に通知
-            if sensor_type == "human_sensor" and event_type == "detected":
-                self._notify_slack_with_emotion()
-            
             return success
         else:
             logging.info(f"[INFO] 対象外のイベント: {sensor_type}.{event_type}")
             return False
     
-    def _notify_slack_with_emotion(self):
+    def _notify_slack_for_speech(self, message: str):
         """
-        本日の感情を推定して Slack に通知
+        BOCCO の発話に基づいて Slack に通知
+        
+        Parameters:
+        -----------
+        message : str
+            BOCCO が発話したメッセージ
         """
         if not self.slack_notifier:
             return
         
         try:
-            # 本日の感情を推定
             emotion = self._estimate_today_emotion()
-            
-            if emotion:
-                # Slack に通知
-                self.slack_notifier.send_notification_with_emotion(
-                    user_id=self.user_id,
-                    emotion=emotion,
-                    room_name=self.user_id
-                )
+            self.slack_notifier.send_message_notification(
+                user_id=self.user_id,
+                message=message,
+                emotion=emotion
+            )
         except Exception as e:
             logging.warning(f"[WARNING] Slack 通知エラー: {str(e)}")
     
@@ -207,50 +212,14 @@ class SensorEventHandler:
         # 人感センサー
         if sensor_type == "human_sensor":
             if event_type == "detected":
-                
                 # 本日の感情を推定
                 emotion = self._estimate_today_emotion()
                 
-                # 感情に基づいたメッセージを生成
-                if emotion == "Positive":
-                    # ポジティブな日 → ほめる
-                   return "ポジティブ"
-                
-                elif emotion == "Negative":
-                    # ネガティブな日 → 励ます
-                    return "ネガティブ"
-                
-                else:  # Neutral
-                   return "ニュートラル"
-            
+                # message_manager から順序付きメッセージを取得
+                if self.message_manager and emotion:
+                    message = self.message_manager.get_message_for_room(self.room_id, emotion)
+                    if message:
+                        logging.info(f"[OK] メッセージマネージャーから取得: {emotion}")
+                        return message
+
         
-        # 温度センサー
-        elif sensor_type == "temperature":
-            if event_type == "changed":
-                temp = data.get("value")
-                if temp is not None:
-                    if temp > 28:
-                        return f"暑いですね。温度は{temp}度です。水分補給してください。"
-                    elif temp < 15:
-                        return f"寒いですね。温度は{temp}度です。暖かくしてください。"
-                    else:
-                        return f"快適です。温度は{temp}度です。"
-        
-        # 湿度センサー
-        elif sensor_type == "humidity":
-            if event_type == "changed":
-                humidity = data.get("value")
-                if humidity is not None:
-                    if humidity > 70:
-                        return f"湿度が高いですね。{humidity}パーセントです。換気しましょう。"
-                    elif humidity < 30:
-                        return f"湿度が低いですね。{humidity}パーセントです。加湿しましょう。"
-        
-        # ドアセンサー
-        elif sensor_type == "door":
-            if event_type == "opened":
-                return "ドアが開きました。"
-            elif event_type == "closed":
-                return "ドアが閉じました。"
-        
-        return None

@@ -221,6 +221,10 @@ BOCCO emoの人感センサーの前を通ると：
 - ✅ 時間帯に応じた動的メッセージ生成（朝・昼・夜で異なるあいさつ）
 - ✅ **Firebaseから感情データを取得し、本日の感情を推定**
 - ✅ **感情に基づいた対応メッセージ（ポジティブなら褒める、ネガティブなら励ます）**
+- ✅ **message.csv から感情別メッセージを管理（各感情最大10個以上対応）**
+- ✅ **各ルーム独立のメッセージ管理（カウンター永続化）**
+- ✅ **一日に一回だけメッセージを発話（同じ日に複数回反応しても1回だけ）**
+- ✅ **メッセージ10個超過時に自動ループ（11個目は1個目に戻る）**
 - ✅ センサ値を活用した柔軟な応答（温度・湿度の変化に対応）
 - ✅ モジュール化された設計で容易に拡張可能
 - ✅ 詳細なログ出力でトラブルシューティングが簡単
@@ -251,6 +255,7 @@ bocco_webhook/
 ├── peak_value_estimator.py           # 感情推定アルゴリズム
 ├── register_webhook.py               # Webhook登録スクリプト
 ├── webhook_test.py                   # Webhook動作テスト
+├── message_manager.py                 # メッセージ管理モジュール
 └── README.md                         # このファイル
 ```
 
@@ -512,6 +517,39 @@ python webhook_test.py
 ```
 
 ブラウザで `http://localhost:5001/webhook` にアクセスしてテスト。
+
+### message_manager.py
+
+メッセージ CSV を管理するモジュール。
+
+**主な機能:**
+- `message.csv` から感情別メッセージを読み込み
+- 各ルーム・感情ごとのメッセージカウンターを管理（永続化）
+- 一日に一回だけメッセージを発話する制御
+- メッセージ数超過時に自動ループ
+
+**カウンター永続化:**
+- `message_counter.json` にカウンター情報を保存
+- サーバー再起動後もカウンターが引き継がれる
+- 各ルーム独立で管理
+
+**使用例:**
+```python
+from message_manager import MessageManager
+
+manager = MessageManager()
+
+# メッセージを取得（一日一回だけ返す）
+message = manager.get_message_for_room("388625ac-1753-48b8-9c91-0a526f861a95", "Positive")
+
+# カウンター状態を確認
+status = manager.get_counter_status("388625ac-1753-48b8-9c91-0a526f861a95")
+# → {"Positive": 2, "Neutral": 0, "Negative": 0}
+
+# 最後に発話した日付を確認
+last_date = manager.get_last_spoken_date("388625ac-1753-48b8-9c91-0a526f861a95")
+# → "2025-01-20"
+```
 
 ---
 

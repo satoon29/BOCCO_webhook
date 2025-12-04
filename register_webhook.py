@@ -50,7 +50,7 @@ if access_token is None:
     raise Exception("[ERROR] アクセストークンの取得に失敗しました")
 
 # 重要: /webhook を末尾に追加！
-webhook_url = "https://97e5284e09fe.ngrok-free.app/webhook"  # ← /webhook を追加
+webhook_url = "https://16b72a17db43.ngrok-free.app/webhook"  # ← /webhook を追加
 
 # Webhook登録
 print("\n[INFO] Webhook登録中...")

@@ -6,6 +6,7 @@ Slack 通知モジュール
 
 import requests
 import logging
+import json
 from typing import Optional, Dict
 
 # ログ設定
@@ -15,24 +16,36 @@ logger = logging.getLogger(__name__)
 class SlackNotifier:
     """Slack に通知を送信するクラス"""
     
-    def __init__(self, webhook_url: str, user_url_mapping: Dict[str, str]):
+    def __init__(
+        self,
+        slack_webhook_mapping: Dict[str, str],
+        feedback_url_mapping: Dict[str, str]
+    ):
         """
         Args:
-            webhook_url (str): Slack の Incoming Webhook URL
-            user_url_mapping (dict): ユーザーID と URL のマッピング
+            slack_webhook_mapping (dict): ユーザーID と Slack Webhook URL のマッピング
+                形式: {"user_id": "https://hooks.slack.com/services/..."},
+            feedback_url_mapping (dict): ユーザーID とフィードバック URL のマッピング
                 形式: {"user_id": "https://example.com"}
         """
-        self.webhook_url = webhook_url
-        self.user_url_mapping = user_url_mapping
+        self.slack_webhook_mapping = slack_webhook_mapping
+        self.feedback_url_mapping = feedback_url_mapping
     
-    def send_notification(self, user_id: str, emotion: Optional[str] = None) -> bool:
+    def send_message_notification(
+        self,
+        user_id: str,
+        message: str,
+        emotion: Optional[str] = None
+    ) -> bool:
         """
-        ユーザーに対応する URL を Slack に送信
+        BOCCO の発話メッセージと共にフィードバック URL を Slack に送信
         
         Parameters:
         -----------
         user_id : str
             ユーザーID
+        message : str
+            BOCCO が発話したメッセージ
         emotion : str
             推定感情（オプション）
         
@@ -40,28 +53,39 @@ class SlackNotifier:
         --------
         bool: 送信成功時 True、失敗時 False
         """
-        # ユーザーIDから URL を取得
-        url = self.user_url_mapping.get(user_id)
-        if not url:
-            logger.warning(f"[WARNING] User ID {user_id} に対応する URL が見つかりません")
+        # ユーザーIDから Slack Webhook URL を取得
+        webhook_url = self.slack_webhook_mapping.get(user_id)
+        if not webhook_url:
+            logger.warning(f"[WARNING] User ID {user_id} に対応する Slack Webhook URL が見つかりません")
             return False
         
-        # メッセージを構成
-        message = self._build_message(user_id, url, emotion)
+        # ユーザーIDからフィードバック URL を取得
+        feedback_url = self.feedback_url_mapping.get(user_id)
+        if not feedback_url:
+            logger.warning(f"[WARNING] User ID {user_id} に対応するフィードバック URL が見つかりません")
+            return False
+        
+        # Slack メッセージペイロードを構成
+        payload = self._build_message_payload(message, feedback_url, emotion)
         
         # Slack に送信
-        return self._send_to_slack(message)
+        return self._send_to_slack(webhook_url, payload)
     
-    def _build_message(self, user_id: str, url: str, emotion: Optional[str] = None) -> dict:
+    def _build_message_payload(
+        self,
+        message: str,
+        feedback_url: str,
+        emotion: Optional[str] = None
+    ) -> dict:
         """
-        Slack 送信用のメッセージを構成
+        Slack 送信用のメッセージペイロードを構成
         
         Parameters:
         -----------
-        user_id : str
-            ユーザーID
-        url : str
-            送信する URL
+        message : str
+            BOCCO が発話したメッセージ
+        feedback_url : str
+            フィードバック URL
         emotion : str
             推定感情
         
@@ -69,62 +93,61 @@ class SlackNotifier:
         --------
         dict: Slack メッセージペイロード
         """
-        # 感情に応じた絵文字を設定
-        emoji_map = {
-            "Positive": "😊",
-            "Neutral": "😐",
-            "Negative": "😔"
+        # 感情に応じた色を設定
+        color_map = {
+            "Positive": "#36a64f",
+            "Neutral": "#808080",
+            "Negative": "#ff0000"
         }
-        emoji = emoji_map.get(emotion, "👋")
-        
-        # メッセージを構成
-        if emotion:
-            title = f"{emoji} 本日の感情: {emotion}"
-            text = f"ユーザー: {user_id}\n感情: {emotion}"
-        else:
-            title = f"👋 新規通知"
-            text = f"ユーザー: {user_id}"
+        color = color_map.get(emotion, "#0099ff")
         
         payload = {
+            "text": "@channel",
             "blocks": [
                 {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"*{title}*\n{text}"
+                        "text": '@channel'
                     }
                 },
                 {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"*URL:*\n{url}"
+                        "text": f'"{message}"'
                     }
                 },
                 {
-                    "type": "actions",
-                    "elements": [
-                        {
-                            "type": "button",
-                            "text": {
-                                "type": "plain_text",
-                                "text": "URL を開く"
-                            },
-                            "url": url
-                        }
-                    ]
+                    "type": "divider"
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": "▼フィードバックが届きました！"
+                    }
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"{feedback_url}"
+                    }
                 }
             ]
         }
         
         return payload
     
-    def _send_to_slack(self, payload: dict) -> bool:
+    def _send_to_slack(self, webhook_url: str, payload: dict) -> bool:
         """
         Slack に JSON ペイロードを送信
         
         Parameters:
         -----------
+        webhook_url : str
+            Slack Incoming Webhook URL
         payload : dict
             Slack メッセージペイロード
         
@@ -134,7 +157,7 @@ class SlackNotifier:
         """
         try:
             response = requests.post(
-                self.webhook_url,
+                webhook_url,
                 json=payload,
                 timeout=10
             )
@@ -150,128 +173,5 @@ class SlackNotifier:
             logger.error("[ERROR] Slack リクエストタイムアウト")
             return False
         except requests.exceptions.RequestException as e:
-            logger.error(f"[ERROR] Slack 送信エラー: {str(e)}")
-            return False
-    
-    def send_notification_with_emotion(
-        self,
-        user_id: str,
-        emotion: str,
-        room_name: str
-    ) -> bool:
-        """
-        感情情報を含めた通知を送信
-        
-        Parameters:
-        -----------
-        user_id : str
-            ユーザーID
-        emotion : str
-            推定感情（Positive/Neutral/Negative）
-        room_name : str
-            BOCCO の部屋名
-        
-        Returns:
-        --------
-        bool: 送信成功時 True、失敗時 False
-        """
-        url = self.user_url_mapping.get(user_id)
-        if not url:
-            logger.warning(f"[WARNING] User ID {user_id} に対応する URL が見つかりません")
-            return False
-        
-        # 感情に応じた絵文字と色を設定
-        emotion_config = {
-            "Positive": {
-                "emoji": "😊",
-                "color": "36a64f",
-                "text": "良好な感情状態です！"
-            },
-            "Neutral": {
-                "emoji": "😐",
-                "color": "808080",
-                "text": "標準的な感情状態です。"
-            },
-            "Negative": {
-                "emoji": "😔",
-                "color": "ff0000",
-                "text": "ネガティブな感情状態のようです。"
-            }
-        }
-        
-        config = emotion_config.get(emotion, emotion_config["Neutral"])
-        
-        # Slack メッセージペイロード（より詳細版）
-        payload = {
-            "blocks": [
-                {
-                    "type": "header",
-                    "text": {
-                        "type": "plain_text",
-                        "text": f"{config['emoji']} BOCCO からのお知らせ"
-                    }
-                },
-                {
-                    "type": "section",
-                    "fields": [
-                        {
-                            "type": "mrkdwn",
-                            "text": f"*ユーザー:*\n{user_id}"
-                        },
-                        {
-                            "type": "mrkdwn",
-                            "text": f"*部屋:*\n{room_name}"
-                        },
-                        {
-                            "type": "mrkdwn",
-                            "text": f"*推定感情:*\n{emotion}"
-                        },
-                        {
-                            "type": "mrkdwn",
-                            "text": f"*ステータス:*\n{config['text']}"
-                        }
-                    ]
-                },
-                {
-                    "type": "divider"
-                },
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"*詳細情報:*\n{url}"
-                    }
-                },
-                {
-                    "type": "actions",
-                    "elements": [
-                        {
-                            "type": "button",
-                            "text": {
-                                "type": "plain_text",
-                                "text": "詳細を確認"
-                            },
-                            "url": url,
-                            "style": "primary"
-                        }
-                    ]
-                }
-            ]
-        }
-        
-        try:
-            response = requests.post(
-                self.webhook_url,
-                json=payload,
-                timeout=10
-            )
-            
-            if response.status_code == 200:
-                logger.info(f"[OK] Slack 通知送信成功: {user_id} ({emotion})")
-                return True
-            else:
-                logger.error(f"[ERROR] Slack 送信失敗: HTTP {response.status_code}")
-                return False
-        except Exception as e:
             logger.error(f"[ERROR] Slack 送信エラー: {str(e)}")
             return False

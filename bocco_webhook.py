@@ -8,6 +8,7 @@ import logging
 from dotenv import load_dotenv
 from sensor_handler import SensorEventHandler
 from slack_notifier import SlackNotifier
+from message_manager import MessageManager
 
 # Windows環境での文字コード対応
 if sys.platform == "win32":
@@ -21,8 +22,8 @@ load_dotenv()
 # 環境変数から設定を読み込み
 ACCESS_TOKEN = os.getenv("BOCCO_ACCESS_TOKEN")
 ROOM_USER_MAPPING_STR = os.getenv("BOCCO_ROOM_USER_MAPPING", "{}")
-SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
 SLACK_USER_URL_MAPPING_STR = os.getenv("SLACK_USER_URL_MAPPING", "{}")
+FEEDBACK_USER_URL_MAPPING_STR = os.getenv("FEEDBACK_USER_URL_MAPPING", "{}")
 
 # Flaskアプリの作成
 app = Flask(__name__)
@@ -41,17 +42,22 @@ except json.JSONDecodeError as e:
     logging.error(f"[ERROR] BOCCO_ROOM_USER_MAPPING のJSON解析に失敗しました: {e}")
     ROOM_USER_MAPPING = {}
 
-# Slack User URL マッピングを読み込み
+# Slack 通知機能を初期化
 slack_notifier = None
-if SLACK_WEBHOOK_URL:
+if SLACK_USER_URL_MAPPING_STR and FEEDBACK_USER_URL_MAPPING_STR:
     try:
         slack_user_url_mapping = json.loads(SLACK_USER_URL_MAPPING_STR)
-        slack_notifier = SlackNotifier(SLACK_WEBHOOK_URL, slack_user_url_mapping)
+        feedback_user_url_mapping = json.loads(FEEDBACK_USER_URL_MAPPING_STR)
+        slack_notifier = SlackNotifier(slack_user_url_mapping, feedback_user_url_mapping)
         logging.info(f"[OK] Slack 通知機能を有効化しました")
     except json.JSONDecodeError as e:
-        logging.error(f"[ERROR] SLACK_USER_URL_MAPPING のJSON解析に失敗しました: {e}")
+        logging.error(f"[ERROR] Slack マッピングのJSON解析に失敗しました: {e}")
 else:
-    logging.warning("[WARNING] SLACK_WEBHOOK_URL が設定されていません")
+    logging.warning("[WARNING] Slack マッピングが設定されていません")
+
+# メッセージマネージャーを初期化
+message_manager = MessageManager("message.csv")
+logging.info("[OK] メッセージマネージャーを初期化しました")
 
 
 def get_user_id_from_room_id(room_id):
@@ -107,8 +113,14 @@ def webhook():
         logging.warning(f"[WARNING] Room ID {room_id} の user_id が見つかりません")
         return jsonify({"status": "processed", "success": False}), 200
 
-    # SensorEventHandler を動的に作成（slack_notifier を渡す）
-    handler = SensorEventHandler(room_id, ACCESS_TOKEN, user_id, slack_notifier)
+    # SensorEventHandler を動的に作成（slack_notifier と message_manager を渡す）
+    handler = SensorEventHandler(
+        room_id,
+        ACCESS_TOKEN,
+        user_id,
+        slack_notifier,
+        message_manager
+    )
 
     # センサイベントを処理
     success = handler.handle_sensor_event(sensor_type, event_type, sensor_data)
